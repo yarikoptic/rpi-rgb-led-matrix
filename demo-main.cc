@@ -208,10 +208,12 @@ public:
   // If "scroll_ms" is negative, don't do any scrolling.
   // If "fixed_width" is non-0, that portion of the image will remain without
   // movement
-  ImageScroller(RGBMatrix *m, int scroll_jumps, int scroll_ms = 30, int fixed_width = 0)
+  ImageScroller(RGBMatrix *m, int scroll_jumps, int scroll_ms = 30,
+                int fixed_width = 0, int nscrolls=0)
     : ThreadedCanvasManipulator(m), scroll_jumps_(scroll_jumps),
       scroll_ms_(scroll_ms),
       fixed_width_(fixed_width),
+      nscrolls_(nscrolls),
       horizontal_position_(0),
       matrix_(m) {
       offscreen_ = matrix_->CreateFrameCanvas();
@@ -269,8 +271,10 @@ public:
   }
 
   void Run() {
+    int done = 0;
     const int screen_height = matrix_->transformer()->Transform(offscreen_)->height();
     const int screen_width = matrix_->transformer()->Transform(offscreen_)->width();
+    horizontal_position_ = -screen_width; // make it enter the screen
     while (running()) {
       {
         MutexLock l(&mutex_new_image_);
@@ -284,24 +288,58 @@ public:
         usleep(100 * 1000);
         continue;
       }
-      for (int x = 0; x < fixed_width_; ++x) {
-        for (int y = 0; y < screen_height; ++y) {
-          const Pixel &p = current_image_.getPixel(
-                     (x) % current_image_.width, y);
-          matrix_->transformer()->Transform(offscreen_)->SetPixel(x, y, p.red, p.green, p.blue);
-        }
-      }
 
-      for (int x = fixed_width_; x < screen_width; ++x) {
+      for (int x = 0; x < screen_width; ++x) {
+        int x_ = horizontal_position_ + x;
+        int presentation = (x_) / current_image_.width;
+        int image_x = x_ % current_image_.width;
+
+        if (nscrolls_ && (presentation >= nscrolls_)) {
+          if (!done) {
+            done = 1;
+            usleep(2000*1000); // keep it on for other 2 seconds
+            break;
+          }
+          else if (x==0) {
+            // didn't work out quite as desired to scroll all the content off the screen... TODO, and remove break above
+            done++;
+          }
+        }
+
+        if (fixed_width_ && presentation > 0) {
+          image_x = (x_ /* + fixed_width_ */) % current_image_.width;
+        }
+
+        if (x_ < 0) {
+          continue;
+        }
+
+        // redraw with fixed portion
+        if (fixed_width_) {
+          if (x < fixed_width_) {
+            if (x_ >= 0 && (horizontal_position_ > 0)) {
+              image_x = x;
+            }
+          }
+          // don't draw fixed portion on the right
+          else if (presentation > 0 && image_x < fixed_width_) {
+            continue;
+          }
+        }
+
         for (int y = 0; y < screen_height; ++y) {
           const Pixel &p = current_image_.getPixel(
-                     (horizontal_position_ + x) % current_image_.width, y);
+            image_x, y);
           matrix_->transformer()->Transform(offscreen_)->SetPixel(x, y, p.red, p.green, p.blue);
         }
+
+      }
+      if (done) { // >= screen_width ) {
+        break;
       }
       offscreen_ = matrix_->SwapOnVSync(offscreen_);
       horizontal_position_ += scroll_jumps_;
-      if (horizontal_position_ < 0) horizontal_position_ = current_image_.width;
+      //if (horizontal_position_ < 0) horizontal_position_ = current_image_.width;
       if (scroll_ms_ <= 0) {
         // No scrolling. We don't need the image anymore.
         current_image_.Delete();
@@ -309,6 +347,8 @@ public:
         usleep(scroll_ms_ * 1000);
       }
     }
+
+    Stop();
   }
 
 private:
@@ -348,6 +388,7 @@ private:
   const int scroll_jumps_;
   const int scroll_ms_;
   const int fixed_width_;
+  const int nscrolls_;
 
   // Current image is only manipulated in our thread.
   Image current_image_;
@@ -1065,6 +1106,7 @@ int main(int argc, char *argv[]) {
   int parallel = 1;
   int scroll_ms = 30;
   int fixed_width = 0;
+  int nscrolls = 0;
   int pwm_bits = -1;
   int brightness = 100;
   int rotation = 0;
@@ -1074,7 +1116,7 @@ int main(int argc, char *argv[]) {
   const char *demo_parameter = NULL;
 
   int opt;
-  while ((opt = getopt(argc, argv, "dlD:t:r:P:c:p:b:m:w:LR:")) != -1) {
+  while ((opt = getopt(argc, argv, "dlD:t:r:P:c:p:b:m:w:n:LR:")) != -1) {
     switch (opt) {
     case 'D':
       demo = atoi(optarg);
@@ -1106,6 +1148,10 @@ int main(int argc, char *argv[]) {
 
     case 'w':
       fixed_width = atoi(optarg);
+      break;
+
+    case 'n':
+      nscrolls = atoi(optarg);
       break;
 
     case 'p':
@@ -1229,7 +1275,8 @@ int main(int argc, char *argv[]) {
       ImageScroller *scroller = new ImageScroller(matrix,
                                                   demo == 1 ? 1 : -1,
                                                   scroll_ms,
-                                                  fixed_width);
+                                                  fixed_width,
+                                                  nscrolls);
       if (!scroller->LoadPPM(demo_parameter))
         return 1;
       image_gen = scroller;
@@ -1279,7 +1326,7 @@ int main(int argc, char *argv[]) {
   if (image_gen == NULL)
     return usage(argv[0]);
 
-  // Image generating demo is crated. Now start the thread.
+  // Image generating demo is created. Now start the thread.
   image_gen->Start();
 
   // Now, the image genreation runs in the background. We can do arbitrary
@@ -1290,9 +1337,14 @@ int main(int argc, char *argv[]) {
   } else if (runtime_seconds > 0) {
     sleep(runtime_seconds);
   } else {
-    // Things are set up. Just wait for <RETURN> to be pressed.
-    printf("Press <RETURN> to exit and reset LEDs\n");
-    getchar();
+    if (nscrolls) {
+      image_gen->WaitStopped();
+    }
+    else {
+      // Things are set up. Just wait for <RETURN> to be pressed.
+      printf("Press <RETURN> to exit and reset LEDs\n");
+      getchar();
+    }
   }
 
   // Stop image generating thread.
