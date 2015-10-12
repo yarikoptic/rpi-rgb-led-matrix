@@ -206,9 +206,12 @@ class ImageScroller : public ThreadedCanvasManipulator {
 public:
   // Scroll image with "scroll_jumps" pixels every "scroll_ms" milliseconds.
   // If "scroll_ms" is negative, don't do any scrolling.
-  ImageScroller(RGBMatrix *m, int scroll_jumps, int scroll_ms = 30)
+  // If "fixed_width" is non-0, that portion of the image will remain without
+  // movement
+  ImageScroller(RGBMatrix *m, int scroll_jumps, int scroll_ms = 30, int fixed_width = 0)
     : ThreadedCanvasManipulator(m), scroll_jumps_(scroll_jumps),
       scroll_ms_(scroll_ms),
+      fixed_width_(fixed_width),
       horizontal_position_(0),
       matrix_(m) {
       offscreen_ = matrix_->CreateFrameCanvas();
@@ -281,7 +284,15 @@ public:
         usleep(100 * 1000);
         continue;
       }
-      for (int x = 0; x < screen_width; ++x) {
+      for (int x = 0; x < fixed_width_; ++x) {
+        for (int y = 0; y < screen_height; ++y) {
+          const Pixel &p = current_image_.getPixel(
+                     (x) % current_image_.width, y);
+          matrix_->transformer()->Transform(offscreen_)->SetPixel(x, y, p.red, p.green, p.blue);
+        }
+      }
+
+      for (int x = fixed_width_; x < screen_width; ++x) {
         for (int y = 0; y < screen_height; ++y) {
           const Pixel &p = current_image_.getPixel(
                      (horizontal_position_ + x) % current_image_.width, y);
@@ -336,6 +347,7 @@ private:
 
   const int scroll_jumps_;
   const int scroll_ms_;
+  const int fixed_width_;
 
   // Current image is only manipulated in our thread.
   Image current_image_;
@@ -1052,6 +1064,7 @@ int main(int argc, char *argv[]) {
   int chain = 1;
   int parallel = 1;
   int scroll_ms = 30;
+  int fixed_width = 0;
   int pwm_bits = -1;
   int brightness = 100;
   int rotation = 0;
@@ -1061,7 +1074,7 @@ int main(int argc, char *argv[]) {
   const char *demo_parameter = NULL;
 
   int opt;
-  while ((opt = getopt(argc, argv, "dlD:t:r:P:c:p:b:m:LR:")) != -1) {
+  while ((opt = getopt(argc, argv, "dlD:t:r:P:c:p:b:m:w:LR:")) != -1) {
     switch (opt) {
     case 'D':
       demo = atoi(optarg);
@@ -1089,6 +1102,10 @@ int main(int argc, char *argv[]) {
 
     case 'm':
       scroll_ms = atoi(optarg);
+      break;
+
+    case 'w':
+      fixed_width = atoi(optarg);
       break;
 
     case 'p':
@@ -1211,7 +1228,8 @@ int main(int argc, char *argv[]) {
     if (demo_parameter) {
       ImageScroller *scroller = new ImageScroller(matrix,
                                                   demo == 1 ? 1 : -1,
-                                                  scroll_ms);
+                                                  scroll_ms,
+                                                  fixed_width);
       if (!scroller->LoadPPM(demo_parameter))
         return 1;
       image_gen = scroller;
