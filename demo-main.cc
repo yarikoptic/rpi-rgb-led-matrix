@@ -297,7 +297,7 @@ public:
         if (nscrolls_ && (presentation >= nscrolls_)) {
           if (!done) {
             done = 1;
-            usleep(2000*1000); // keep it on for other 2 seconds
+            usleep(6000*1000); // keep it on for other 6 seconds
             break;
           }
           else if (x==0) {
@@ -938,7 +938,7 @@ public:
           mutate(children_[i]);
         }
       }
-      usleep(delay_ms_ * 1000);
+      usleep(delay_ms_ * 6000);
     }
   }
 
